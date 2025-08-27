@@ -112,7 +112,7 @@ class VRWKV_SpatialMix_Tri_Eff_2D(nn.Module):
         self.device = None
         attn_sz = n_embd
 
-        self.directions = 3  # 三个扫描方向
+        self.directions = 3 
 
         self.key = nn.Linear(n_embd, attn_sz, bias=False)
         self.value = nn.Linear(n_embd, attn_sz, bias=False)
@@ -123,7 +123,6 @@ class VRWKV_SpatialMix_Tri_Eff_2D(nn.Module):
             self.key_norm = None
         self.output = nn.Linear(attn_sz, n_embd, bias=False)
 
-        # 替代 fusion_attention 的 1x1 卷积
         self.fusion_conv = nn.Conv1d(in_channels=3, out_channels=1, kernel_size=1, bias=False)
 
         with torch.no_grad():
@@ -131,14 +130,7 @@ class VRWKV_SpatialMix_Tri_Eff_2D(nn.Module):
             self.spatial_first = nn.Parameter(torch.randn((self.directions, self.n_embd)))
 
     def shift_2d(self, input, shift_pixel=1, gamma=1/4, patch_resolution=None):
-        """
-        二维版本的 q_shift 操作。
-        参数:
-            input (torch.Tensor): 输入张量，形状为 (B, N, C)。
-            shift_pixel (int): 移位的像素数量。
-            gamma (float): 每个移位部分占总通道数的比例，默认为 1/6。
-            patch_resolution (tuple): 输入的空间分辨率，形状为 (H, W)。
-        """
+
         B, N, C = input.shape
         H, W = patch_resolution
         # (B, N, C) -> (B, C, H, W)
@@ -146,16 +138,16 @@ class VRWKV_SpatialMix_Tri_Eff_2D(nn.Module):
         output = torch.zeros_like(input)
         C_gamma = int(C * gamma)
 
-        # 宽度方向（W）向右移位
+
         output[:, 0:C_gamma, :, shift_pixel:W] = input[:, 0:C_gamma, :, 0:W-shift_pixel]
-        # 宽度方向（W）向左移位
+
         output[:, C_gamma:2*C_gamma, :, 0:W-shift_pixel] = input[:, C_gamma:2*C_gamma, :, shift_pixel:W]
-        # 高度方向（H）向下移位
+
         output[:, 2*C_gamma:3*C_gamma, shift_pixel:H, :] = input[:, 2*C_gamma:3*C_gamma, 0:H-shift_pixel, :]
-        # 高度方向（H）向上移位
+
         output[:, 3*C_gamma:4*C_gamma, 0:H-shift_pixel, :] = input[:, 3*C_gamma:4*C_gamma, shift_pixel:H, :]
 
-        # 返回 (B, N, C)
+
         return output.flatten(2).transpose(1, 2)
 
     def jit_func(self, x, resolution):
@@ -257,68 +249,52 @@ def extract_contour(image_tensor: torch.Tensor) -> torch.Tensor:
     sobel_tensors = []
 
     for b in range(B):
-        # Step 1: 转换为 NumPy 格式 [H, W, 3], 值范围 [0, 255]
-        img_np = (image_tensor[b].cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
 
-        # Step 2: HSV 掩膜提取皮肤区域
+        img_np = (image_tensor[b].cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
         lower_skin = np.array([0, 20, 20])
         upper_skin = np.array([25, 255, 255])
         mask_hsv = cv2.inRange(hsv, lower_skin, upper_skin)
 
-        # Step 3: 形态学操作清理 HSV 掩膜
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_hsv = cv2.morphologyEx(mask_hsv, cv2.MORPH_OPEN, kernel)
         mask_hsv = cv2.morphologyEx(mask_hsv, cv2.MORPH_CLOSE, kernel)
         kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))  # 可调整大小控制扩张程度
         mask_hsv_dilated = cv2.dilate(mask_hsv, kernel_dilate, iterations=1)
         mask_hsv = mask_hsv_dilated
-
-        # Step 4: 灰度图 + 平滑
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # Step 5: Sobel 提取梯度
         sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
         sobel_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
         sobel_magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
         sobel_magnitude = np.uint8(255 * sobel_magnitude / np.max(sobel_magnitude))
 
-        # Step 6: 应用 HSV 掩膜
         sobel_masked = cv2.bitwise_and(sobel_magnitude, sobel_magnitude, mask=mask_hsv)
 
-        # Step 7: 梯度增强
         sobel_enhanced = np.uint8(np.power(sobel_masked / 255.0, 0.5) * 255)
-
-        # Step 8: 自适应阈值 + 二值化
         _, sobel_binary = cv2.threshold(sobel_enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # Step 9: 形态学清理
         sobel_binary = cv2.morphologyEx(sobel_binary, cv2.MORPH_CLOSE, kernel)
 
-        # Step 10: 查找最大轮廓
+
         contours, _ = cv2.findContours(sobel_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if len(contours) > 0:
             largest_contour = max(contours, key=cv2.contourArea)
 
-            # 创建空白图像用于绘制加粗的白色轮廓
             contour_only = np.zeros_like(gray)
             cv2.drawContours(contour_only, [largest_contour], -1, color=255, thickness=3)
 
-            # 转换为 float32 并归一化到 [0, 1]
-            contour_tensor = torch.from_numpy(contour_only.astype(np.float32) / 255.0).unsqueeze(0)  # shape: [1, H, W]
+            contour_tensor = torch.from_numpy(contour_only.astype(np.float32) / 255.0).unsqueeze(0)  
 
         else:
-            # 如果未找到轮廓，返回全1掩膜
             contour_tensor = torch.ones((1, H, W), dtype=torch.float32)
 
-         # <<< 新增：保存 sobel_binary 结果 >>>
         sobel_binary_tensor = torch.from_numpy(sobel_binary.astype(np.float32) / 255.0).unsqueeze(0)  # shape: [1, H, W]
 
         contour_tensors.append(contour_tensor)
-        sobel_tensors.append(sobel_binary_tensor)  # <<< 新增列表保存
-
+        sobel_tensors.append(sobel_binary_tensor) 
     # 合并所有 batch 的结果
     output_tensor = torch.stack(contour_tensors, dim=0).to(device)  # shape: [B, 1, H, W]
     sobel_tensor = torch.stack(sobel_tensors, dim=0).to(device)     # shape: [B, 1, H, W]
@@ -588,20 +564,12 @@ class ConvNeXtEGNet(nn.Module):
 if __name__ == '__main__':
     import torch
     from fvcore.nn import FlopCountAnalysis, parameter_count
-     # Step 1: 初始化模型
-    model = ConvNeXtEGNet().eval()  # 推荐设置为 eval 模式
+    model = ConvNeXtEGNet().eval()  
 
-    # Step 2: 构造一个虚拟输入张量（根据你的模型输入维度调整）
     input_tensor = torch.randn(1, 3, 384, 384)  # batch_size=1, channel=3, HxW=256x256
-
-    # Step 3: 统计参数量
     params = parameter_count(model)
-    total_params = params["total"] / 1e6  # 单位转换为 M（百万）
-
-    # Step 4: 统计 FLOPs
+    total_params = params["total"] / 1e6  
     flops = FlopCountAnalysis(model, input_tensor)
-    total_flops = flops.total() / 1e9  # 单位转换为 G（十亿）
-
-    # Step 5: 打印结果
+    total_flops = flops.total() / 1e9  
     print(f"Total Parameters: {total_params:.2f} M")
     print(f"Total FLOPs: {total_flops:.2f} G")
