@@ -17,14 +17,11 @@ import torch.nn as nn
 from torch.nn import functional as F
 from einops import rearrange
 
-'''
-    最终版的 Sobel UNet
-'''
 
 T_MAX = 96*96
 
 from torch.utils.cpp_extension import load
-wkv_cuda = load(name="wkv", sources=["/root/autodl-tmp/MSDUNet/cuda/wkv_op.cpp", "/root/autodl-tmp/MSDUNet/cuda/wkv_cuda.cu"],
+wkv_cuda = load(name="wkv", sources=["/root/autodl-tmp/EG-Net/cuda/wkv_op.cpp", "/root/autodl-tmp/EG-Net/cuda/wkv_cuda.cu"],
                 verbose=True, extra_cuda_cflags=['-res-usage', '--maxrregcount 60', '--use_fast_math', '-O3', '-Xptxas -O3', f'-DTmax={T_MAX}'])
 class WKV(torch.autograd.Function):
     @staticmethod
