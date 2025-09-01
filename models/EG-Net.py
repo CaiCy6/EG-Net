@@ -166,7 +166,6 @@ class VRWKV_SpatialMix_Tri_Eff_2D(nn.Module):
         sr, k, v = self.jit_func(x, resolution)
         h, w = resolution
 
-        # 第一个方向：原顺序
         v1 = RUN_CUDA(B, T, C, self.spatial_decay[0] / T, self.spatial_first[0] / T, k, v)
         x = v1
         if self.key_norm is not None:
@@ -236,15 +235,9 @@ class Block_2D_Channel(nn.Module):
         return x
 
 def extract_contour(image_tensor: torch.Tensor) -> torch.Tensor:
-    """
-    输入: (B, 3, H, W), dtype=float32 [0~1]
-    输出: (B, 1, H, W), dtype=float32 [0~1]，白色轮廓线
-    """
-
     B, C, H, W = image_tensor.shape
     device = image_tensor.device
-
-    # 结果保存列表
+  
     contour_tensors = []
     sobel_tensors = []
 
@@ -259,7 +252,7 @@ def extract_contour(image_tensor: torch.Tensor) -> torch.Tensor:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_hsv = cv2.morphologyEx(mask_hsv, cv2.MORPH_OPEN, kernel)
         mask_hsv = cv2.morphologyEx(mask_hsv, cv2.MORPH_CLOSE, kernel)
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))  # 可调整大小控制扩张程度
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)) 
         mask_hsv_dilated = cv2.dilate(mask_hsv, kernel_dilate, iterations=1)
         mask_hsv = mask_hsv_dilated
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
@@ -291,11 +284,11 @@ def extract_contour(image_tensor: torch.Tensor) -> torch.Tensor:
         else:
             contour_tensor = torch.ones((1, H, W), dtype=torch.float32)
 
-        sobel_binary_tensor = torch.from_numpy(sobel_binary.astype(np.float32) / 255.0).unsqueeze(0)  # shape: [1, H, W]
+        sobel_binary_tensor = torch.from_numpy(sobel_binary.astype(np.float32) / 255.0).unsqueeze(0) 
 
         contour_tensors.append(contour_tensor)
         sobel_tensors.append(sobel_binary_tensor) 
-    # 合并所有 batch 的结果
+      
     output_tensor = torch.stack(contour_tensors, dim=0).to(device)  # shape: [B, 1, H, W]
     sobel_tensor = torch.stack(sobel_tensors, dim=0).to(device)     # shape: [B, 1, H, W]
 
@@ -398,17 +391,15 @@ class ImprovedChannelAttention(nn.Module):
         iden = x
         b, c, h, w = x.size()
 
-        # 原有池化路径
+
         avg_out = self.avg_pool(x).view(b, c)
         max_out = self.max_pool(x).view(b, c)
         avg_fc = self.mlp(avg_out).view(b, c, 1, 1)
         max_fc = self.mlp(max_out).view(b, c, 1, 1)
 
-        # 新增：1x1卷积路径（捕捉局部通道相关性）
         conv_path = self.bn1x1(self.conv1x1(x))
-        conv_attention = F.adaptive_avg_pool2d(conv_path, 1)  # 再次池化用于 attention 融合
+        conv_attention = F.adaptive_avg_pool2d(conv_path, 1) 
 
-        # 合并所有路径
         attention = self.sigmoid((avg_fc + max_fc + conv_attention) * self.gamma + self.bias)
 
         return x * attention.expand_as(x) + iden
@@ -431,7 +422,7 @@ class ResidualBlock2D(nn.Module):
         x = self.relu(x)
         x = self.conv2(x)
         x = self.bn2(x)
-        x += identity  # 残差连接
+        x += identity  
         x = self.relu(x)
         return x
 
@@ -439,8 +430,6 @@ class ConvNeXtEGNet(nn.Module):
     def __init__(self, pretrained_encoder_path=None, pretrained=False, checkpoint_path=None,freeze_encoder=False):
         super(ConvNeXtEGNet, self).__init__()
 
-        # 'convnext_small.in12k_ft_in1k_384'
-        # 'convnextv2_tiny.fcmae'
         self.encoder = timm.create_model('convnext_small.in12k_ft_in1k_384', pretrained=False, features_only=True)
 
         if pretrained_encoder_path is not None:
@@ -462,7 +451,6 @@ class ConvNeXtEGNet(nn.Module):
                 param.requires_grad = False
 
     
-        # self.res = ResidualBlock2D()
         self.block0 = Block_2D(n_embd=96, n_layer=4, layer_id=0)
         self.block1 = Block_2D(n_embd=192, n_layer=4, layer_id=1)
         self.block2 = Block_2D(n_embd=384, n_layer=4, layer_id=2)
@@ -492,7 +480,6 @@ class ConvNeXtEGNet(nn.Module):
         self.final_conv = nn.Conv2d(32, 1, kernel_size=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.att = nn.Sigmoid()
-        # 定义 4 个可学习的标量权重，初始化为 0.1
         self.alpha0 = nn.Parameter(torch.tensor(0.1))
         self.alpha1 = nn.Parameter(torch.tensor(0.1))
         self.alpha2 = nn.Parameter(torch.tensor(0.1))
@@ -523,42 +510,33 @@ class ConvNeXtEGNet(nn.Module):
         hsv2att = self.att(hsv2)
         hsv3att = self.att(hsv3)
         
-        # res = self.res(x)
         
-        feats = self.encoder(x)  # 输出4个阶段特征
+        feats = self.encoder(x)
         
         Edge_feats = [None] * 4
         Global_feats = [None] * 4
         
-        # 下面是四层的Edge特征
         Edge_feats[0] = feats[0] + feats[0] * hsv0att * self.alpha0 # 96
         Edge_feats[1] = feats[1] + feats[1] * hsv1att * self.alpha1 # 48
         Edge_feats[2] = feats[2] + feats[2] * hsv2att * self.alpha2
         Edge_feats[3] = feats[3] + feats[3] * hsv3att * self.alpha3
-        
-        # 下面要写全局特征提取 SpatialMix部分
-        Global_feats[0] = self.block0(feats[0])    # 96     96  6.5 B T C 96 96 96 
-        Global_feats[1] = self.block1(feats[1])    # 192    48            192 48 48 
-        Global_feats[2] = self.block2(feats[2])    # 384    24            384 24 24 
-        Global_feats[3] = self.block3(feats[3])    # 768    12            768 12 12 
 
-        # 下面写加权融合的模块
+        Global_feats[0] = self.block0(feats[0])   
+        Global_feats[1] = self.block1(feats[1])  
+        Global_feats[2] = self.block2(feats[2])   
+        Global_feats[3] = self.block3(feats[3])   
+
         feats[2] = self.EGBN2(feats[2] + Edge_feats[2] + self.global3(Global_feats[3]))
         feats[1] = self.EGBN1(feats[1] + Edge_feats[1] + self.global2(Global_feats[2]))
         feats[0] = self.EGBN0(feats[0] + Edge_feats[0] + self.global1(Global_feats[1]))        
         
-        # feats[2] = self.EGBN2(feats[2] + Edge_feats[2] + self.global3(Global_feats[3]))
-        # feats[1] = self.EGBN1(feats[1] + Edge_feats[1] + self.global2(Global_feats[2]))
-        # feats[0] = self.EGBN0(feats[0] + Edge_feats[0] + self.global1(Global_feats[1]))
-
-        # d4 = self.decoder4(feats[3])  # 从最深处上采样
         d4 = self.decoder4(feats[3])
-        d3 = self.decoder3(d4 + feats[2])  # 简单拼接/加法
+        d3 = self.decoder3(d4 + feats[2]) 
         d2 = self.decoder2(d3 + feats[1])
         d1 = self.decoder1(d2 + feats[0])
         
-        d0 = self.decoder0(d1)        # 最后的一次上采样并且调整通道数为32
-        out = self.final_conv(d0) # 加上残差块的输出并且调整通道数到输出类别 1  + res
+        d0 = self.decoder0(d1)      
+        out = self.final_conv(d0)
         return out
     
 if __name__ == '__main__':
@@ -566,7 +544,7 @@ if __name__ == '__main__':
     from fvcore.nn import FlopCountAnalysis, parameter_count
     model = ConvNeXtEGNet().eval()  
 
-    input_tensor = torch.randn(1, 3, 384, 384)  # batch_size=1, channel=3, HxW=256x256
+    input_tensor = torch.randn(1, 3, 384, 384) 
     params = parameter_count(model)
     total_params = params["total"] / 1e6  
     flops = FlopCountAnalysis(model, input_tensor)
