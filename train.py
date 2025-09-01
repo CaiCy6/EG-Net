@@ -20,17 +20,29 @@ warnings.filterwarnings("ignore")
 from models.EG-Net import ConvNeXtEGNet as model
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 def structure_loss(pred, mask):
     weit = 1 + 5 * torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = F.binary_cross_entropy_with_logits(pred, mask, reduce='none')
+
+    wbce = F.binary_cross_entropy_with_logits(pred, mask, reduction='none')
     wbce = (weit * wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
 
-    pred = torch.sigmoid(pred)
-    inter = ((pred * mask) * weit).sum(dim=(2, 3))
-    union = ((pred + mask) * weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1) / (union - inter + 1)
+    pred_sig = torch.sigmoid(pred)  
+    pred_flat = (pred_sig * weit).view(pred.size(0), -1) 
+    mask_flat = (mask * weit).view(mask.size(0), -1)
 
-    return (wbce + wiou).mean()
+    intersection = (pred_flat * mask_flat).sum(dim=1)
+    pred_sq_sum = pred_flat.pow(2).sum(dim=1)
+    mask_sq_sum = mask_flat.pow(2).sum(dim=1)
+
+    dice = (2. * intersection + 1) / (pred_sq_sum + mask_sq_sum + 1)
+    wdice = 1 - dice  
+    loss = (wbce + wdice).mean()
+
+    return loss
 
 
 def test(model, path, dataset):
