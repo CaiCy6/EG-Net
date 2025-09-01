@@ -245,8 +245,8 @@ def extract_contour(image_tensor: torch.Tensor) -> torch.Tensor:
 
         img_np = (image_tensor[b].cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
-        lower_skin = np.array([0, 0, 0])
-        upper_skin = np.array([25, 255, 255])
+        lower_skin = np.array([5, 0, 0])
+        upper_skin = np.array([20, 255, 200])
         mask_hsv = cv2.inRange(hsv, lower_skin, upper_skin)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
